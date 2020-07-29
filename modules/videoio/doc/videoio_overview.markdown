@@ -39,10 +39,10 @@ For example to grab from default camera using Direct Show as backend
 
 ```cpp
 //declare a capture object
-cv::VideoCapture cap(0 + cv::CAP_DSHOW);
+cv::VideoCapture cap(0, cv::CAP_DSHOW);
 
 //or specify the apiPreference with open
-cap.open(0 + cv::CAP_DSHOW);
+cap.open(0, cv::CAP_DSHOW);
 ```
 
 If you want to grab from a file using the Direct Show as backend:
@@ -59,7 +59,7 @@ cap.open(filename, cv::CAP_DSHOW);
 
 #### How to enable backends
 
-There are two kinds of videoio backends: built-in backends and plugins which will be loaded at runtime (since OpenCV 4.1.1). Use functions cv::videoio_registry::getBackends, cv::videoio_registry::hasBackend and cv::videoio_registry::getBackendName to check actual presence of backend during runtime.
+There are two kinds of videoio backends: built-in backends and plugins which will be loaded at runtime (since OpenCV 4.1.0). Use functions cv::videoio_registry::getBackends, cv::videoio_registry::hasBackend and cv::videoio_registry::getBackendName to check actual presence of backend during runtime.
 
 To enable built-in videoio backends:
   1. Enable corresponding CMake option, e.g. `-DWITH_GSTREAMER=ON`

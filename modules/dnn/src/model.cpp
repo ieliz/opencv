@@ -23,7 +23,7 @@ struct Model::Impl
     Mat    blob;
     std::vector<String> outNames;
 
-    void predict(Net& net, const Mat& frame, std::vector<Mat>& outs)
+    void predict(Net& net, const Mat& frame, OutputArrayOfArrays outs)
     {
         if (size.empty())
             CV_Error(Error::StsBadSize, "Input size not specified");
@@ -41,15 +41,27 @@ struct Model::Impl
     }
 };
 
+Model::Model() : impl(new Impl) {}
+
 Model::Model(const String& model, const String& config)
     : Net(readNet(model, config)), impl(new Impl)
 {
     impl->outNames = getUnconnectedOutLayersNames();
+    std::vector<MatShape> inLayerShapes;
+    std::vector<MatShape> outLayerShapes;
+    getLayerShapes(MatShape(), 0, inLayerShapes, outLayerShapes);
+    if (!inLayerShapes.empty() && inLayerShapes[0].size() == 4)
+        impl->size = Size(inLayerShapes[0][3], inLayerShapes[0][2]);
 };
 
 Model::Model(const Net& network) : Net(network), impl(new Impl)
 {
     impl->outNames = getUnconnectedOutLayersNames();
+    std::vector<MatShape> inLayerShapes;
+    std::vector<MatShape> outLayerShapes;
+    getLayerShapes(MatShape(), 0, inLayerShapes, outLayerShapes);
+    if (!inLayerShapes.empty() && inLayerShapes[0].size() == 4)
+        impl->size = Size(inLayerShapes[0][3], inLayerShapes[0][2]);
 };
 
 Model& Model::setInputSize(const Size& size)
@@ -100,9 +112,7 @@ void Model::setInputParams(double scale, const Size& size, const Scalar& mean,
 
 void Model::predict(InputArray frame, OutputArrayOfArrays outs)
 {
-    std::vector<Mat> outputs;
-    outs.getMatVector(outputs);
-    impl->predict(*this, frame.getMat(), outputs);
+    impl->predict(*this, frame.getMat(), outs);
 }
 
 ClassificationModel::ClassificationModel(const String& model, const String& config)
@@ -127,10 +137,126 @@ void ClassificationModel::classify(InputArray frame, int& classId, float& conf)
     std::tie(classId, conf) = classify(frame);
 }
 
-DetectionModel::DetectionModel(const String& model, const String& config)
+KeypointsModel::KeypointsModel(const String& model, const String& config)
     : Model(model, config) {};
 
-DetectionModel::DetectionModel(const Net& network) : Model(network) {};
+KeypointsModel::KeypointsModel(const Net& network) : Model(network) {};
+
+std::vector<Point2f> KeypointsModel::estimate(InputArray frame, float thresh)
+{
+
+    int frameHeight = frame.getMat().size[0];
+    int frameWidth = frame.getMat().size[1];
+    std::vector<Mat> outs;
+
+    impl->predict(*this, frame.getMat(), outs);
+    CV_Assert(outs.size() == 1);
+    Mat output = outs[0];
+
+    const int nPoints = output.size[1];
+    std::vector<Point2f> points;
+
+    // If output is a map, extract the keypoints
+    if (output.dims == 4)
+    {
+        int height = output.size[2];
+        int width = output.size[3];
+
+        // find the position of the keypoints (ignore the background)
+        for (int n=0; n < nPoints - 1; n++)
+        {
+            // Probability map of corresponding keypoint
+            Mat probMap(height, width, CV_32F, output.ptr(0, n));
+
+            Point2f p(-1, -1);
+            Point maxLoc;
+            double prob;
+            minMaxLoc(probMap, NULL, &prob, NULL, &maxLoc);
+            if (prob > thresh)
+            {
+                p = maxLoc;
+                p.x *= (float)frameWidth / width;
+                p.y *= (float)frameHeight / height;
+            }
+            points.push_back(p);
+        }
+    }
+    // Otherwise the output is a vector of keypoints and we can just return it
+    else
+    {
+        for (int n=0; n < nPoints; n++)
+        {
+            Point2f p;
+            p.x = *output.ptr<float>(0, n, 0);
+            p.y = *output.ptr<float>(0, n, 1);
+            points.push_back(p);
+        }
+    }
+    return points;
+}
+
+SegmentationModel::SegmentationModel(const String& model, const String& config)
+    : Model(model, config) {};
+
+SegmentationModel::SegmentationModel(const Net& network) : Model(network) {};
+
+void SegmentationModel::segment(InputArray frame, OutputArray mask)
+{
+
+    std::vector<Mat> outs;
+    impl->predict(*this, frame.getMat(), outs);
+    CV_Assert(outs.size() == 1);
+    Mat score = outs[0];
+
+    const int chns = score.size[1];
+    const int rows = score.size[2];
+    const int cols = score.size[3];
+
+    mask.create(rows, cols, CV_8U);
+    Mat classIds = mask.getMat();
+    classIds.setTo(0);
+    Mat maxVal(rows, cols, CV_32F, score.data);
+
+    for (int ch = 1; ch < chns; ch++)
+    {
+        for (int row = 0; row < rows; row++)
+        {
+            const float *ptrScore = score.ptr<float>(0, ch, row);
+            uint8_t *ptrMaxCl = classIds.ptr<uint8_t>(row);
+            float *ptrMaxVal = maxVal.ptr<float>(row);
+            for (int col = 0; col < cols; col++)
+            {
+                if (ptrScore[col] > ptrMaxVal[col])
+                {
+                    ptrMaxVal[col] = ptrScore[col];
+                    ptrMaxCl[col] = ch;
+                }
+            }
+        }
+    }
+}
+
+void disableRegionNMS(Net& net)
+{
+    for (String& name : net.getUnconnectedOutLayersNames())
+    {
+        int layerId = net.getLayerId(name);
+        Ptr<RegionLayer> layer = net.getLayer(layerId).dynamicCast<RegionLayer>();
+        if (!layer.empty())
+        {
+            layer->nmsThreshold = 0;
+        }
+    }
+}
+
+DetectionModel::DetectionModel(const String& model, const String& config)
+    : Model(model, config) {
+      disableRegionNMS(*this);
+}
+
+DetectionModel::DetectionModel(const Net& network) : Model(network) {
+    disableRegionNMS(*this);
+}
 
 void DetectionModel::detect(InputArray frame, CV_OUT std::vector<int>& classIds,
                             CV_OUT std::vector<float>& confidences, CV_OUT std::vector<Rect>& boxes,
@@ -155,9 +281,6 @@ void DetectionModel::detect(InputArray frame, CV_OUT std::vector<int>& classIds,
     int lastLayerId = getLayerId(layerNames.back());
     Ptr<Layer> lastLayer = getLayer(lastLayerId);
 
-    std::vector<int> predClassIds;
-    std::vector<Rect> predBoxes;
-    std::vector<float> predConf;
     if (lastLayer->type == "DetectionOutput")
     {
         // Network produces output blob with a shape 1x1xNx7 where N is a number of
@@ -179,7 +302,7 @@ void DetectionModel::detect(InputArray frame, CV_OUT std::vector<int>& classIds,
                 int width  = right  - left + 1;
                 int height = bottom - top + 1;
 
-                if (width * height <= 1)
+                if (width <= 2 || height <= 2)
                 {
                     left   = data[j + 3] * frameWidth;
                     top    = data[j + 4] * frameHeight;
@@ -193,15 +316,18 @@ void DetectionModel::detect(InputArray frame, CV_OUT std::vector<int>& classIds,
                 top    = std::max(0, std::min(top, frameHeight - 1));
                 width  = std::max(1, std::min(width, frameWidth - left));
                 height = std::max(1, std::min(height, frameHeight - top));
-                predBoxes.emplace_back(left, top, width, height);
+                boxes.emplace_back(left, top, width, height);
 
-                predClassIds.push_back(static_cast<int>(data[j + 1]));
-                predConf.push_back(conf);
+                classIds.push_back(static_cast<int>(data[j + 1]));
+                confidences.push_back(conf);
             }
         }
     }
     else if (lastLayer->type == "Region")
     {
+        std::vector<int> predClassIds;
+        std::vector<Rect> predBoxes;
+        std::vector<float> predConf;
         for (int i = 0; i < detections.size(); ++i)
         {
             // Network produces output blob with a shape NxC where N is a number of
@@ -234,35 +360,45 @@ void DetectionModel::detect(InputArray frame, CV_OUT std::vector<int>& classIds,
                 predBoxes.emplace_back(left, top, width, height);
             }
         }
-    }
-    else
-        CV_Error(Error::StsNotImplemented, "Unknown output layer type: \"" + lastLayer->type + "\"");
 
-    if (nmsThreshold)
-    {
-        std::vector<int> indices;
-        NMSBoxes(predBoxes, predConf, confThreshold, nmsThreshold, indices);
-
-        boxes.reserve(indices.size());
-        confidences.reserve(indices.size());
-        classIds.reserve(indices.size());
-
-        for (int idx : indices)
+        if (nmsThreshold)
         {
-            boxes.push_back(predBoxes[idx]);
-            confidences.push_back(predConf[idx]);
-            classIds.push_back(predClassIds[idx]);
+            std::map<int, std::vector<size_t> > class2indices;
+            for (size_t i = 0; i < predClassIds.size(); i++)
+            {
+                if (predConf[i] >= confThreshold)
+                {
+                    class2indices[predClassIds[i]].push_back(i);
+                }
+            }
+            for (const auto& it : class2indices)
+            {
+                std::vector<Rect> localBoxes;
+                std::vector<float> localConfidences;
+                for (size_t idx : it.second)
+                {
+                    localBoxes.push_back(predBoxes[idx]);
+                    localConfidences.push_back(predConf[idx]);
+                }
+                std::vector<int> indices;
+                NMSBoxes(localBoxes, localConfidences, confThreshold, nmsThreshold, indices);
+                classIds.resize(classIds.size() + indices.size(), it.first);
+                for (int idx : indices)
+                {
+                    boxes.push_back(localBoxes[idx]);
+                    confidences.push_back(localConfidences[idx]);
+                }
+            }
+        }
+        else
+        {
+            boxes       = std::move(predBoxes);
+            classIds    = std::move(predClassIds);
+            confidences = std::move(predConf);
         }
     }
     else
-    {
-        boxes       = std::move(predBoxes);
-        classIds    = std::move(predClassIds);
-        confidences = std::move(predConf);
-    }
-
-
-
+        CV_Error(Error::StsNotImplemented, "Unknown output layer type: \"" + lastLayer->type + "\"");
 }
 
 }} // namespace

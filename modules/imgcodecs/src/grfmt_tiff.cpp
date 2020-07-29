@@ -273,7 +273,11 @@ bool TiffDecoder::readHeader()
         {
             bool isGrayScale = photometric == PHOTOMETRIC_MINISWHITE || photometric == PHOTOMETRIC_MINISBLACK;
             uint16 bpp = 8, ncn = isGrayScale ? 1 : 3;
-            CV_TIFF_CHECK_CALL(TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bpp));
+            if (0 == TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bpp))
+            {
+                // TIFF bi-level images don't require TIFFTAG_BITSPERSAMPLE tag
+                bpp = 1;
+            }
             CV_TIFF_CHECK_CALL_DEBUG(TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &ncn));
 
             m_width = wdth;
@@ -430,7 +434,11 @@ bool  TiffDecoder::readData( Mat& img )
         int is_tiled = TIFFIsTiled(tif) != 0;
         bool isGrayScale = photometric == PHOTOMETRIC_MINISWHITE || photometric == PHOTOMETRIC_MINISBLACK;
         uint16 bpp = 8, ncn = isGrayScale ? 1 : 3;
-        CV_TIFF_CHECK_CALL(TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bpp));
+        if (0 == TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bpp))
+        {
+            // TIFF bi-level images don't require TIFFTAG_BITSPERSAMPLE tag
+            bpp = 1;
+        }
         CV_TIFF_CHECK_CALL_DEBUG(TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &ncn));
         uint16 img_orientation = ORIENTATION_TOPLEFT;
         CV_TIFF_CHECK_CALL_DEBUG(TIFFGetField(tif, TIFFTAG_ORIENTATION, &img_orientation));
@@ -824,6 +832,7 @@ bool TiffEncoder::writeLibTiff( const std::vector<Mat>& img_vec, const std::vect
     for (size_t page = 0; page < img_vec.size(); page++)
     {
         const Mat& img = img_vec[page];
+        CV_Assert(!img.empty());
         int channels = img.channels();
         int width = img.cols, height = img.rows;
         int type = img.type();
@@ -883,6 +892,7 @@ bool TiffEncoder::writeLibTiff( const std::vector<Mat>& img_vec, const std::vect
 
         const int bitsPerByte = 8;
         size_t fileStep = (width * channels * bitsPerChannel) / bitsPerByte;
+        CV_Assert(fileStep > 0);
 
         int rowsPerStrip = (int)((1 << 13) / fileStep);
         readParam(params, TIFFTAG_ROWSPERSTRIP, rowsPerStrip);

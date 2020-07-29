@@ -45,6 +45,8 @@ public:
     GlobalLoggingInitStruct()
         : logTagManager(m_defaultUnconfiguredGlobalLevel)
     {
+        (void)getInitializationMutex();  // ensure initialization of global objects
+
         applyConfigString();
         handleMalformed();
     }
@@ -106,6 +108,7 @@ struct GlobalLoggingInitCall
     GlobalLoggingInitCall()
     {
         getGlobalLoggingInitStruct();
+        (void)getGlobalLogTag();  // complete initialization of logger structures
     }
 };
 
@@ -191,8 +194,8 @@ void writeLogMessage(LogLevel logLevel, const char* message)
     case LOG_LEVEL_INFO:    ss << "[ INFO:" << threadID << "] " << message << std::endl; break;
     case LOG_LEVEL_DEBUG:   ss << "[DEBUG:" << threadID << "] " << message << std::endl; break;
     case LOG_LEVEL_VERBOSE: ss << message << std::endl; break;
-    default:
-        return;
+    case LOG_LEVEL_SILENT: return;  // avoid compiler warning about incomplete switch
+    case ENUM_LOG_LEVEL_FORCE_INT: return;  // avoid compiler warning about incomplete switch
     }
 #ifdef __ANDROID__
     int android_logLevel = ANDROID_LOG_INFO;

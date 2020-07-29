@@ -163,4 +163,43 @@ TEST(GArray, TestIntermediateOutput)
     EXPECT_EQ(10u, out_points.size());
     EXPECT_EQ(10,  out_count[0]);
 }
+
+TEST(GArray_VectorRef, TestMov)
+{
+    // Warning: this test is testing some not-very-public APIs
+    // Test how VectorRef's mov() (aka poor man's move()) is working.
+
+    using I = int;
+    using V = std::vector<I>;
+    const V vgold = { 1, 2, 3};
+    V vtest = vgold;
+    const I* vptr = vtest.data();
+
+    cv::detail::VectorRef vref(vtest);
+    cv::detail::VectorRef vmov;
+    vmov.reset<I>();
+
+    EXPECT_EQ(vgold, vref.rref<I>());
+
+    vmov.mov(vref);
+    EXPECT_EQ(vgold, vmov.rref<I>());
+    EXPECT_EQ(vptr,  vmov.rref<I>().data());
+    EXPECT_EQ(V{}, vref.rref<I>());
+    EXPECT_EQ(V{}, vtest);
+}
+
+TEST(GArray_VectorRef, Spec)
+{
+    cv::detail::VectorRef v1(std::vector<cv::Rect>{});
+    EXPECT_EQ(cv::detail::TypeSpec::RECT, v1.spec());
+
+    cv::detail::VectorRef v2(std::vector<cv::Mat>{});
+    EXPECT_EQ(cv::detail::TypeSpec::MAT,  v2.spec());
+
+    cv::detail::VectorRef v3(std::vector<int>{});
+    EXPECT_EQ(cv::detail::TypeSpec::OPAQUE_SPEC, v3.spec());
+
+    cv::detail::VectorRef v4(std::vector<std::string>{});
+    EXPECT_EQ(cv::detail::TypeSpec::OPAQUE_SPEC, v4.spec());
+}
 } // namespace opencv_test

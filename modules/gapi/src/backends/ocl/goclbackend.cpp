@@ -2,13 +2,10 @@
 // It is subject to the license terms in the LICENSE file found in the top-level directory
 // of this distribution and at http://opencv.org/license.html.
 //
-// Copyright (C) 2018 Intel Corporation
+// Copyright (C) 2018-2020 Intel Corporation
 
 
 #include "precomp.hpp"
-
-#include <functional>
-#include <unordered_set>
 
 #include <ade/util/algorithm.hpp>
 
@@ -26,8 +23,6 @@
 #include "compiler/gmodel.hpp"
 
 #include "backends/ocl/goclbackend.hpp"
-#include "backends/ocl/goclimgproc.hpp"
-#include "backends/ocl/goclcore.hpp"
 
 #include "api/gbackend_priv.hpp" // FIXME: Make it part of Backend SDK!
 
@@ -38,13 +33,13 @@
 //
 // If not, we need to introduce that!
 using GOCLModel = ade::TypedGraph
-    < cv::gimpl::Unit
+    < cv::gimpl::OCLUnit
     , cv::gimpl::Protocol
     >;
 
 // FIXME: Same issue with Typed and ConstTyped
 using GConstGOCLModel = ade::ConstTypedGraph
-    < cv::gimpl::Unit
+    < cv::gimpl::OCLUnit
     , cv::gimpl::Protocol
     >;
 
@@ -58,7 +53,7 @@ namespace
         {
             GOCLModel gm(graph);
             auto ocl_impl = cv::util::any_cast<cv::GOCLKernel>(impl.opaque);
-            gm.metadata(op_node).set(cv::gimpl::Unit{ocl_impl});
+            gm.metadata(op_node).set(cv::gimpl::OCLUnit{ocl_impl});
         }
 
         virtual EPtr compile(const ade::Graph &graph,
@@ -92,7 +87,7 @@ cv::gimpl::GOCLExecutable::GOCLExecutable(const ade::Graph &g,
         {
             m_dataNodes.push_back(nh);
             const auto &desc = m_gm.metadata(nh).get<Data>();
-            if (desc.storage == Data::Storage::CONST)
+            if (desc.storage == Data::Storage::CONST_VAL)
             {
                 auto rc = RcDesc{desc.rc, desc.shape, desc.ctor};
                 magazine::bindInArg(m_res, rc, m_gm.metadata(nh).get<ConstValue>().arg);
@@ -101,7 +96,7 @@ cv::gimpl::GOCLExecutable::GOCLExecutable(const ade::Graph &g,
             if (desc.storage == Data::Storage::INTERNAL && desc.shape == GShape::GMAT)
             {
                 const auto mat_desc = util::get<cv::GMatDesc>(desc.meta);
-                auto& mat = m_res.slot<cv::gapi::own::Mat>()[desc.rc];
+                auto& mat = m_res.slot<cv::Mat>()[desc.rc];
                 createMat(mat_desc, mat);
             }
             break;
@@ -118,7 +113,8 @@ cv::GArg cv::gimpl::GOCLExecutable::packArg(const GArg &arg)
     // FIXME: this check has to be done somewhere in compilation stage.
     GAPI_Assert(   arg.kind != cv::detail::ArgKind::GMAT
               && arg.kind != cv::detail::ArgKind::GSCALAR
-              && arg.kind != cv::detail::ArgKind::GARRAY);
+              && arg.kind != cv::detail::ArgKind::GARRAY
+              && arg.kind != cv::detail::ArgKind::GOPAQUE);
 
     if (arg.kind != cv::detail::ArgKind::GOBJREF)
     {
@@ -133,10 +129,13 @@ cv::GArg cv::gimpl::GOCLExecutable::packArg(const GArg &arg)
     switch (ref.shape)
     {
     case GShape::GMAT:    return GArg(m_res.slot<cv::UMat>()[ref.id]);
-    case GShape::GSCALAR: return GArg(m_res.slot<cv::gapi::own::Scalar>()[ref.id]);
-        // Note: .at() is intentional for GArray as object MUST be already there
+    case GShape::GSCALAR: return GArg(m_res.slot<cv::Scalar>()[ref.id]);
+    // Note: .at() is intentional for GArray as object MUST be already there
     //   (and constructed by either bindIn/Out or resetInternal)
     case GShape::GARRAY:  return GArg(m_res.slot<cv::detail::VectorRef>().at(ref.id));
+    // Note: .at() is intentional for GOpaque as object MUST be already there
+    //   (and constructed by either bindIn/Out or resetInternal)
+    case GShape::GOPAQUE:  return GArg(m_res.slot<cv::detail::OpaqueRef>().at(ref.id));
     default:
         util::throw_error(std::logic_error("Unsupported GShape type"));
         break;
@@ -199,7 +198,7 @@ void cv::gimpl::GOCLExecutable::run(std::vector<InObj>  &&input_objs,
 
         // Obtain our real execution unit
         // TODO: Should kernels be copyable?
-        GOCLKernel k = gcm.metadata(op_info.nh).get<Unit>().k;
+        GOCLKernel k = gcm.metadata(op_info.nh).get<OCLUnit>().k;
 
         // Initialize kernel's execution context:
         // - Input parameters

@@ -47,10 +47,14 @@ ade::NodeHandle GModel::mkDataNode(GModel::Graph &g, const GOrigin& origin)
     {
         auto value = value_of(origin);
         meta       = descr_of(value);
-        storage    = Data::Storage::CONST;
+        storage    = Data::Storage::CONST_VAL;
         g.metadata(data_h).set(ConstValue{value});
     }
-    g.metadata(data_h).set(Data{origin.shape, id, meta, origin.ctor, storage});
+    // FIXME: Sometimes a GArray-related node may be created w/o the
+    // associated host-type constructor (e.g. when the array is
+    // somewhere in the middle of the graph).
+    auto ctor_copy = origin.ctor;
+    g.metadata(data_h).set(Data{origin.shape, id, meta, ctor_copy, storage});
     return data_h;
 }
 
@@ -114,7 +118,7 @@ void GModel::linkOut(Graph &g, ade::NodeHandle opH, ade::NodeHandle objH, std::s
     op.outs[out_port] = RcDesc{gm.rc, gm.shape, {}};
 }
 
-std::vector<ade::NodeHandle> GModel::orderedInputs(ConstGraph &g, ade::NodeHandle nh)
+std::vector<ade::NodeHandle> GModel::orderedInputs(const ConstGraph &g, ade::NodeHandle nh)
 {
     std::vector<ade::NodeHandle> sorted_in_nhs(nh->inEdges().size());
     for (const auto& in_eh : nh->inEdges())
@@ -126,7 +130,7 @@ std::vector<ade::NodeHandle> GModel::orderedInputs(ConstGraph &g, ade::NodeHandl
     return sorted_in_nhs;
 }
 
-std::vector<ade::NodeHandle> GModel::orderedOutputs(ConstGraph &g, ade::NodeHandle nh)
+std::vector<ade::NodeHandle> GModel::orderedOutputs(const ConstGraph &g, ade::NodeHandle nh)
 {
     std::vector<ade::NodeHandle> sorted_out_nhs(nh->outEdges().size());
     for (const auto& out_eh : nh->outEdges())
@@ -185,6 +189,16 @@ void GModel::log(Graph &g, ade::EdgeHandle eh, std::string &&msg, ade::NodeHandl
     }
 }
 
+void GModel::log_clear(Graph &g, ade::NodeHandle node)
+{
+    if (g.metadata(node).contains<Journal>())
+    {
+        // according to documentation, clear() doesn't deallocate (__capacity__ of vector preserved)
+        g.metadata(node).get<Journal>().messages.clear();
+    }
+}
+
+
 ade::NodeHandle GModel::detail::dataNodeOf(const ConstLayoutGraph &g, const GOrigin &origin)
 {
     // FIXME: Does it still work with graph transformations, e.g. redirectWriter()??
@@ -213,7 +227,7 @@ void GModel::redirectWriter(Graph &g, ade::NodeHandle from, ade::NodeHandle to)
     linkOut(g, op, to, output.port);
 }
 
-GMetaArgs GModel::collectInputMeta(GModel::ConstGraph cg, ade::NodeHandle node)
+GMetaArgs GModel::collectInputMeta(const GModel::ConstGraph &cg, ade::NodeHandle node)
 {
     GAPI_Assert(cg.metadata(node).get<NodeType>().t == NodeType::OP);
     GMetaArgs in_meta_args(cg.metadata(node).get<Op>().args.size());
@@ -240,7 +254,7 @@ ade::EdgeHandle GModel::getInEdgeByPort(const GModel::ConstGraph& cg,
     return *edge;
 }
 
-GMetaArgs GModel::collectOutputMeta(GModel::ConstGraph cg, ade::NodeHandle node)
+GMetaArgs GModel::collectOutputMeta(const GModel::ConstGraph &cg, ade::NodeHandle node)
 {
     GAPI_Assert(cg.metadata(node).get<NodeType>().t == NodeType::OP);
     GMetaArgs out_meta_args(cg.metadata(node).get<Op>().outs.size());
